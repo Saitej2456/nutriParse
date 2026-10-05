@@ -13,7 +13,7 @@ nutriparse-env/
 .cache/
 
 # Generated output
-output/*.json
+output/
 
 # OS
 .DS_Store
