@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+nutriparse-env/
+
+# IDE
+.vscode/
+.idea/
+
+# Paddle caches
+.paddlex/
+.cache/
+
+# Generated output
+output/*.json
+
+# OS
+.DS_Store
+Thumbs.db
