@@ -3,6 +3,7 @@ from pathlib import Path
 
 from extractor import NutritionExtractor
 from nutrition_parser import NutritionParser
+from nutrition_normalizer import NutritionNormalizer
 
 
 # ---------------------------------------------------------
@@ -12,10 +13,11 @@ from nutrition_parser import NutritionParser
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 INPUT_IMAGE = PROJECT_ROOT / "input" / "food_label.jpg"
-OUTPUT_DIR = PROJECT_ROOT / "output"
+OUTPUT_DIR  = PROJECT_ROOT / "output"
 
-RAW_OUTPUT = OUTPUT_DIR / "raw_paddle_output.html"
-NUTRITION_OUTPUT = OUTPUT_DIR / "nutrition.json"
+RAW_OUTPUT        = OUTPUT_DIR / "raw_paddle_output.html"
+NUTRITION_OUTPUT  = OUTPUT_DIR / "nutrition.json"
+NORMALIZED_OUTPUT = OUTPUT_DIR / "normalized_nutrition.json"
 
 
 # ---------------------------------------------------------
@@ -46,7 +48,7 @@ def extract_raw_content(results) -> str:
     """
 
     table_contents = []
-    all_contents = []
+    all_contents   = []
 
     for result in results:
         # Use dict-key access — attribute access raises AttributeError
@@ -77,15 +79,16 @@ def extract_raw_content(results) -> str:
     return "\n".join(all_contents)
 
 
-
 # ---------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------
 
 def main():
     print("=" * 60)
-    print("NUTRIPARSE - STAGE 2")
-    print("Image -> PaddleOCR-VL -> Structured Nutrition")
+    print("NUTRIPARSE")
+    print("Stage 1: Image -> PaddleOCR-VL")
+    print("Stage 2: OCR output -> Canonical Nutrition JSON")
+    print("Stage 3: Canonical JSON -> Normalized + Validated JSON")
     print("=" * 60)
 
     # -----------------------------------------------------
@@ -111,7 +114,7 @@ def main():
     # -----------------------------------------------------
 
     print("\n" + "-" * 60)
-    print("Loading PaddleOCR-VL...")
+    print("Stage 1 — PaddleOCR-VL extraction")
     print("-" * 60)
 
     extractor = NutritionExtractor()
@@ -122,10 +125,7 @@ def main():
 
     print("PaddleOCR-VL extraction complete.")
 
-    # -----------------------------------------------------
     # Extract useful content from PaddleOCR-VL result
-    # -----------------------------------------------------
-
     raw_content = extract_raw_content(results)
 
     if not raw_content.strip():
@@ -133,65 +133,93 @@ def main():
             "PaddleOCR-VL returned no parsed content."
         )
 
-    # -----------------------------------------------------
     # Save raw PaddleOCR output
-    # -----------------------------------------------------
+    RAW_OUTPUT.write_text(raw_content, encoding="utf-8")
 
-    RAW_OUTPUT.write_text(
-        raw_content,
-        encoding="utf-8"
-    )
-
-    print("\nRaw parsed output saved to:")
-    print(RAW_OUTPUT)
+    print(f"\nRaw parsed output saved to:\n{RAW_OUTPUT}")
 
     # -----------------------------------------------------
     # Stage 2: Nutrition parsing
     # -----------------------------------------------------
 
     print("\n" + "-" * 60)
-    print("Parsing nutrition information...")
+    print("Stage 2 — Nutrition parsing")
     print("-" * 60)
 
     parser = NutritionParser()
 
     nutrition_data = parser.parse(raw_content)
 
-    # -----------------------------------------------------
-    # Save canonical nutrition JSON
-    # -----------------------------------------------------
-
+    # Save canonical nutrition JSON (Stage 2 output preserved)
     NUTRITION_OUTPUT.write_text(
-        json.dumps(
-            nutrition_data,
-            indent=4,
-            ensure_ascii=False
-        ),
-        encoding="utf-8"
+        json.dumps(nutrition_data, indent=4, ensure_ascii=False),
+        encoding="utf-8",
     )
 
+    print("\n" + "=" * 60)
+    print("CANONICAL NUTRITION DATA (Stage 2)")
+    print("=" * 60)
+    print(json.dumps(nutrition_data, indent=4, ensure_ascii=False))
+    print(f"\nSaved to:\n{NUTRITION_OUTPUT}")
+
     # -----------------------------------------------------
-    # Display result
+    # Stage 3: Normalization and validation
+    # -----------------------------------------------------
+
+    print("\n" + "-" * 60)
+    print("Stage 3 — Normalization and validation")
+    print("-" * 60)
+
+    normalizer = NutritionNormalizer(check_energy_consistency=True)
+
+    norm_result = normalizer.normalize(nutrition_data)
+
+    # Build the output dict with source provenance
+    normalized_output = norm_result.to_dict(
+        input_image=str(INPUT_IMAGE.relative_to(PROJECT_ROOT))
+    )
+
+    # Save normalized output
+    NORMALIZED_OUTPUT.write_text(
+        json.dumps(normalized_output, indent=4, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    print("\n" + "=" * 60)
+    print("NORMALIZED NUTRITION DATA (Stage 3)")
+    print("=" * 60)
+    print(json.dumps(normalized_output, indent=4, ensure_ascii=False))
+    print(f"\nSaved to:\n{NORMALIZED_OUTPUT}")
+
+    # -----------------------------------------------------
+    # Validation summary
     # -----------------------------------------------------
 
     print("\n" + "=" * 60)
-    print("CANONICAL NUTRITION DATA")
+    if norm_result.is_valid():
+        print("VALIDATION: PASSED (no errors)")
+    else:
+        print("VALIDATION: FAILED")
     print("=" * 60)
 
-    print(
-        json.dumps(
-            nutrition_data,
-            indent=4,
-            ensure_ascii=False
-        )
-    )
+    validation = normalized_output["validation"]
 
-    print("=" * 60)
-    print("STAGE 2 COMPLETE")
-    print("=" * 60)
+    if validation["errors"]:
+        print("\nErrors:")
+        for e in validation["errors"]:
+            print(f"  [{e['code']}] {e['message']}")
 
-    print("\nStructured nutrition JSON saved to:")
-    print(NUTRITION_OUTPUT)
+    if validation["warnings"]:
+        print("\nWarnings:")
+        for w in validation["warnings"]:
+            print(f"  [{w['code']}] {w['message']}")
+
+    if not validation["errors"] and not validation["warnings"]:
+        print("\nNo issues found.")
+
+    print("\n" + "=" * 60)
+    print("PIPELINE COMPLETE")
+    print("=" * 60)
 
 
 # ---------------------------------------------------------
