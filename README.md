@@ -56,9 +56,27 @@ Canonical Nutrition JSON
 Validated Normalized Nutrition JSON
 ```
 
+### Stage 4 — Deterministic Original Nutri-Score ✅
+
+Stage 4 calculates a deterministic, auditable **original/pre-2023 Nutri-Score** for supported general foods from the normalized per-100 g values.
+
+```text
+Normalized Nutrition JSON
+        ↓
+Original Nutri-Score tables
+        ↓
+Negative points: energy, sugars, saturated fat, sodium
+Positive points: fibre, protein
+        ↓
+Score and grade A-E
+```
+
+The implementation uses sodium (not salt) and converts normalized kcal to kJ locally for the energy lookup. Fruit, vegetable, legume, and nut (FVLN) percentage is not available from the current extraction pipeline, is never estimated, and is explicitly recorded as unavailable. Consequently, every Stage 4 result includes partial/incomplete-calculation metadata even when all scorable nutrients are present.
+
+This is a research baseline, not the revised/current 2023 Nutri-Score algorithm. It supports the general-food, per-100 g path only. Beverage, cheese, fat/oil, nut/seed, and other category-specific rules are intentionally unsupported because NutriParse does not infer a food category.
+
 ### Upcoming Stages
 The following stages have not yet been implemented:
-- Stage 4 — Nutri-Score grading
 - Stage 5 — JEV-based grading
 - Stage 6 — Confidence-based JEV/deterministic fallback
 - Stage 7 — End-to-end evaluation
@@ -144,17 +162,20 @@ nutriParse/
 ├── output/
 │   ├── raw_paddle_output.html
 │   ├── nutrition.json
-│   └── normalized_nutrition.json
+│   ├── normalized_nutrition.json
+│   └── nutri_score.json
 │
 ├── src/
 │   ├── __init__.py
 │   ├── extractor.py
 │   ├── nutrition_parser.py
 │   ├── nutrition_normalizer.py
+│   ├── nutri_score.py
 │   ├── main.py
 │   └── tests/
 │       ├── __init__.py
-│       └── test_normalizer.py
+│       ├── test_normalizer.py
+│       └── test_nutri_score.py
 │
 ├── requirements.txt
 ├── README.md
@@ -238,7 +259,9 @@ Acts as the pipeline entry point. It:
 7. Saves `output/nutrition.json`.
 8. Passes the parsed data to `NutritionNormalizer` (Stage 3).
 9. Saves `output/normalized_nutrition.json`.
-10. Prints the normalized data and validation summary.
+10. Calculates deterministic original Nutri-Score points and grade (Stage 4).
+11. Saves `output/nutri_score.json`.
+12. Prints the normalized data, score breakdown, and validation summary.
 
 ---
 
@@ -369,18 +392,20 @@ The pipeline will process:
 
 ## Output
 
-After a successful run, three generated files are produced:
+After a successful run, four generated files are produced:
 
 ```text
 output/
 ├── raw_paddle_output.html
 ├── nutrition.json
-└── normalized_nutrition.json
+├── normalized_nutrition.json
+└── nutri_score.json
 ```
 
 - **`raw_paddle_output.html`**: Raw HTML/table content extracted by PaddleOCR-VL. Useful for debugging OCR output.
 - **`nutrition.json`**: Canonical per-serving nutrition JSON from Stage 2.
 - **`normalized_nutrition.json`**: Fully normalized, validated JSON from Stage 3. This is the input for future grading stages.
+- **`nutri_score.json`**: Auditable Stage 4 original/pre-2023 Nutri-Score breakdown for the supported general-food path. It records missing values, FVLN unavailability, and unsupported-category limitations.
 
 ---
 
@@ -469,22 +494,11 @@ Grading will be implemented separately.
 
 The current implementation is intentionally an early pipeline stage.
 
-**No normalization yet**
-Values are currently extracted according to the label's displayed basis.
-For example: `35 g serving` has not yet been converted to `100 g basis` or another grading-specific basis.
+**Stage 4 category limits**
+The current deterministic score is deliberately restricted to general foods normalized per 100 g. It does not infer beverage, cheese, fat/oil, nut/seed, or other special categories, so their category-specific original Nutri-Score rules are not applied.
 
-**No advanced validation yet**
-The parser does not currently perform comprehensive checks such as:
-- Impossible nutrient values
-- Relationships between nutrients
-- Missing-value classification
-- Serving-basis consistency
-- Unit conversion
-- Per-100g/per-100ml conversion
-These will be handled in Stage 3.
-
-**No grading yet**
-The project does not currently calculate a Nutri-Score.
+**FVLN percentage unavailable**
+The pipeline does not extract fruit, vegetable, legume, and nut percentage. Stage 4 never infers, estimates, or equates that percentage with zero; instead, it records the component as unavailable and marks the resulting baseline score as partial.
 
 **No JEV integration yet**
 JEV will be integrated in a later stage after the nutrition data has been normalized and validated.
@@ -511,9 +525,10 @@ JEV will be integrated in a later stage after the nutrition data has been normal
 - **Missing vs zero:** `null` = field absent from label; `0` = field present and zero — these are explicitly kept distinct
 
 **Stage 4 — Nutri-Score**
-- **Status:** Planned
-- **Description:** Implement the official Nutri-Score scoring logic as a deterministic baseline.
-- `Normalized Nutrition → Official Scoring Rules → Nutri-Score Points → A - E Grade`
+- **Status:** ✅ Complete (general-food research baseline)
+- **Description:** Deterministic original/pre-2023 scoring for energy, total sugars, saturated fat, sodium, fibre, and protein. FVLN is explicitly unavailable and special-category rules are unsupported.
+- **Pipeline:** `Normalized Nutrition → Original Scoring Rules → Auditable Points → A - E Grade`
+- **Output:** `output/nutri_score.json`
 
 **Stage 5 — JEV Integration**
 - **Status:** Planned
@@ -560,13 +575,19 @@ At the current checkpoint, NutriParse can successfully perform:
 ```text
 Food Label Image
        ↓
- PaddleOCR-VL
-       ↓
-Raw HTML/Table Information
+PaddleOCR-VL
        ↓
 Nutrition Parser
        ↓
-Structured Nutrition JSON
+Canonical Nutrition JSON
+       ↓
+Nutrition Normalizer
+       ↓
+Validated / Normalized Nutrition
+       ↓
+Deterministic Original Nutri-Score
+       ↓
+Partial Baseline Grade A-E
 ```
 
-This establishes the foundation for the normalization and grading stages that follow.
+The current milestone includes normalization and deterministic grading. Next work is focused on the later AI-based grading and hybrid stages.

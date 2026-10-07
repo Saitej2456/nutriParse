@@ -4,6 +4,7 @@ from pathlib import Path
 from extractor import NutritionExtractor
 from nutrition_parser import NutritionParser
 from nutrition_normalizer import NutritionNormalizer
+from nutri_score import NutriScoreCalculator
 
 
 # ---------------------------------------------------------
@@ -18,6 +19,7 @@ OUTPUT_DIR  = PROJECT_ROOT / "output"
 RAW_OUTPUT        = OUTPUT_DIR / "raw_paddle_output.html"
 NUTRITION_OUTPUT  = OUTPUT_DIR / "nutrition.json"
 NORMALIZED_OUTPUT = OUTPUT_DIR / "normalized_nutrition.json"
+NUTRI_SCORE_OUTPUT = OUTPUT_DIR / "nutri_score.json"
 
 
 # ---------------------------------------------------------
@@ -89,6 +91,7 @@ def main():
     print("Stage 1: Image -> PaddleOCR-VL")
     print("Stage 2: OCR output -> Canonical Nutrition JSON")
     print("Stage 3: Canonical JSON -> Normalized + Validated JSON")
+    print("Stage 4: Normalized JSON -> Original Nutri-Score (general food)")
     print("=" * 60)
 
     # -----------------------------------------------------
@@ -192,14 +195,34 @@ def main():
     print(f"\nSaved to:\n{NORMALIZED_OUTPUT}")
 
     # -----------------------------------------------------
+    # Stage 4: Deterministic original Nutri-Score
+    # -----------------------------------------------------
+
+    print("\n" + "-" * 60)
+    print("Stage 4 — Deterministic original Nutri-Score")
+    print("-" * 60)
+
+    nutri_score = NutriScoreCalculator().calculate(normalized_output)
+    NUTRI_SCORE_OUTPUT.write_text(
+        json.dumps(nutri_score, indent=4, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    print("\n" + "=" * 60)
+    print("NUTRI-SCORE (Stage 4)")
+    print("=" * 60)
+    print(json.dumps(nutri_score, indent=4, ensure_ascii=False))
+    print(f"\nSaved to:\n{NUTRI_SCORE_OUTPUT}")
+
+    # -----------------------------------------------------
     # Validation summary
     # -----------------------------------------------------
 
     print("\n" + "=" * 60)
     if norm_result.is_valid():
-        print("VALIDATION: PASSED (no errors)")
+        print("STAGE 3 VALIDATION: PASSED (no normalization errors)")
     else:
-        print("VALIDATION: FAILED")
+        print("STAGE 3 VALIDATION: FAILED")
     print("=" * 60)
 
     validation = normalized_output["validation"]
@@ -214,8 +237,10 @@ def main():
         for w in validation["warnings"]:
             print(f"  [{w['code']}] {w['message']}")
 
-    if not validation["errors"] and not validation["warnings"]:
-        print("\nNo issues found.")
+    if nutri_score["warnings"]:
+        print("\nStage 4 warnings:")
+        for warning in nutri_score["warnings"]:
+            print(f"  {warning}")
 
     print("\n" + "=" * 60)
     print("PIPELINE COMPLETE")
