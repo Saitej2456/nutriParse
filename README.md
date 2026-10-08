@@ -75,10 +75,15 @@ The implementation uses sodium (not salt) and converts normalized kcal to kJ loc
 
 This is a research baseline, not the revised/current 2023 Nutri-Score algorithm. It supports the general-food, per-100 g path only. Beverage, cheese, fat/oil, nut/seed, and other category-specific rules are intentionally unsupported because NutriParse does not infer a food category.
 
+### Stage 5 — OpenJev Reliability Decision ✅
+
+Stage 5 does **not** calculate a Nutri-Score. Stage 4 remains solely responsible for the deterministic A-E nutrition grade. Stage 5 evaluates **instance-specific** reliability evidence: extraction/parsing/normalization problems, validation warnings or errors, missing required scoring fields, grade availability, and any genuine extraction-quality evidence. OpenJev then makes a semantic **TRUST**, **REVIEW**, or **REJECT** decision about whether this automated result is reliable to use.
+
+The current backend is the existing local Ollama model `qwen2.5-coder:14b`; no paid or external API is used. Its returned probability distribution and confidence are model-derived decision signals, not mathematically guaranteed correctness. PaddleOCR-VL currently exposes no stable extraction-confidence metric to this pipeline, so extraction quality is recorded as unavailable rather than estimated. Project-wide baseline limits, such as unavailable FVLN or unsupported special categories, are not treated as evidence that a particular label is unreliable.
+
 ### Upcoming Stages
 The following stages have not yet been implemented:
-- Stage 5 — JEV-based grading
-- Stage 6 — Confidence-based JEV/deterministic fallback
+- Stage 6 — Confidence-aware OpenJev reliability handling
 - Stage 7 — End-to-end evaluation
 
 ---
@@ -112,15 +117,20 @@ The planned overall architecture is:
                                │
                                ▼
                     ┌─────────────────────┐
-                    │   Nutrition Grading │
-                    │      / JEV          │
-                    │     (Future)        │
+                    │ Deterministic Score │
+                    │     (Stage 4)       │
                     └──────────┬──────────┘
                                │
                                ▼
                     ┌─────────────────────┐
-                    │    Final Grade      │
-                    │      A - E          │
+                    │ OpenJev Reliability │
+                    │     (Stage 5)       │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │ Grade A-E + TRUST / │
+                    │ REVIEW / REJECT     │
                     └─────────────────────┘
 ```
 
@@ -147,6 +157,24 @@ NutritionParser
         │
         ▼
 output/nutrition.json
+        │
+        ▼
+NutritionNormalizer
+        │
+        ▼
+output/normalized_nutrition.json
+        │
+        ▼
+NutriScoreCalculator
+        │
+        ▼
+output/nutri_score.json
+        │
+        ▼
+OpenJevDecisionLayer
+        │
+        ▼
+output/jev_decision.json
 ```
 
 ---
@@ -163,7 +191,8 @@ nutriParse/
 │   ├── raw_paddle_output.html
 │   ├── nutrition.json
 │   ├── normalized_nutrition.json
-│   └── nutri_score.json
+│   ├── nutri_score.json
+│   └── jev_decision.json
 │
 ├── src/
 │   ├── __init__.py
@@ -171,11 +200,13 @@ nutriParse/
 │   ├── nutrition_parser.py
 │   ├── nutrition_normalizer.py
 │   ├── nutri_score.py
+│   ├── jev_decision.py
 │   ├── main.py
 │   └── tests/
 │       ├── __init__.py
 │       ├── test_normalizer.py
-│       └── test_nutri_score.py
+│       ├── test_nutri_score.py
+│       └── test_jev_decision.py
 │
 ├── requirements.txt
 ├── README.md
@@ -261,7 +292,9 @@ Acts as the pipeline entry point. It:
 9. Saves `output/normalized_nutrition.json`.
 10. Calculates deterministic original Nutri-Score points and grade (Stage 4).
 11. Saves `output/nutri_score.json`.
-12. Prints the normalized data, score breakdown, and validation summary.
+12. Uses OpenJev to assess the reliability of the deterministic result (Stage 5).
+13. Saves `output/jev_decision.json`.
+14. Prints the normalized data, deterministic score, reliability decision, and validation summary.
 
 ---
 
@@ -392,20 +425,22 @@ The pipeline will process:
 
 ## Output
 
-After a successful run, four generated files are produced:
+After a successful run, five generated files are produced:
 
 ```text
 output/
 ├── raw_paddle_output.html
 ├── nutrition.json
 ├── normalized_nutrition.json
-└── nutri_score.json
+├── nutri_score.json
+└── jev_decision.json
 ```
 
 - **`raw_paddle_output.html`**: Raw HTML/table content extracted by PaddleOCR-VL. Useful for debugging OCR output.
 - **`nutrition.json`**: Canonical per-serving nutrition JSON from Stage 2.
 - **`normalized_nutrition.json`**: Fully normalized, validated JSON from Stage 3. This is the input for future grading stages.
 - **`nutri_score.json`**: Auditable Stage 4 original/pre-2023 Nutri-Score breakdown for the supported general-food path. It records missing values, FVLN unavailability, and unsupported-category limitations.
+- **`jev_decision.json`**: Stage 5 OpenJev reliability decision, using local Ollama probability/confidence values when available. It explicitly records an unavailable decision if the local service cannot be reached.
 
 ---
 
@@ -500,8 +535,8 @@ The current deterministic score is deliberately restricted to general foods norm
 **FVLN percentage unavailable**
 The pipeline does not extract fruit, vegetable, legume, and nut percentage. Stage 4 never infers, estimates, or equates that percentage with zero; instead, it records the component as unavailable and marks the resulting baseline score as partial.
 
-**No JEV integration yet**
-JEV will be integrated in a later stage after the nutrition data has been normalized and validated.
+**OpenJev availability**
+Stage 5 is optional for pipeline continuity. If local Ollama or `qwen2.5-coder:14b` is unavailable, NutriParse writes an explicit unavailable decision while preserving the deterministic Stage 4 grade.
 
 ---
 
@@ -530,40 +565,31 @@ JEV will be integrated in a later stage after the nutrition data has been normal
 - **Pipeline:** `Normalized Nutrition → Original Scoring Rules → Auditable Points → A - E Grade`
 - **Output:** `output/nutri_score.json`
 
-**Stage 5 — JEV Integration**
-- **Status:** Planned
-- **Description:** JEV will receive structured nutrition information together with the relevant grading instructions.
-- `Normalized Nutrition + Grading Instructions → JEV → Grade + Score + Confidence`
+**Stage 5 — OpenJev Reliability Decision**
+- **Status:** ✅ Complete
+- **Description:** OpenJev evaluates evidence about the deterministic Stage 4 result and returns TRUST, REVIEW, or REJECT with model-derived probabilities/confidence. It never calculates the Nutri-Score.
+- **Backend:** local Ollama using `qwen2.5-coder:14b`; no paid external API.
+- **Output:** `output/jev_decision.json`
 
-**Stage 6 — Confidence-Gated Hybrid Grading**
+**Stage 6 — Confidence-Aware OpenJev Reliability Handling**
 - **Status:** Planned
-- **Description:** The planned architecture is:
+- **Description:** Stage 4 keeps the deterministic A-E grade, while Stage 5 returns an OpenJev reliability decision and confidence. Stage 6 will handle that reliability assessment according to its confidence:
 
 ```text
-                 ┌───────────────┐
-                 │  Normalized   │
-                 │   Nutrition   │
-                 └───────┬───────┘
-                         │
-                         ▼
-                    ┌─────────┐
-                    │   JEV   │
-                    └────┬────┘
-                         │
-                 Grade + Confidence
-                         │
-                 ┌───────┴───────┐
-                 │               │
-            High confidence   Low confidence
-                 │               │
-                 ▼               ▼
-            JEV result    Deterministic
-                           rule engine
-                 │               │
-                 └───────┬───────┘
-                         ▼
-                    Final Grade
+Deterministic Grade A-E
+        ↓
+OpenJev Reliability Decision
+        ↓
+Decision + confidence
+        ↓
+TRUST / REVIEW / REJECT
 ```
+
+- High-confidence TRUST: accept/display the deterministic grade as reliable.
+- High-confidence REVIEW: flag the result for review.
+- High-confidence REJECT: do not treat the deterministic grade as reliable.
+- Low-confidence decision: mark the reliability assessment as uncertain and request manual review.
+
 *The confidence threshold will be determined using validation data rather than being arbitrarily chosen.*
 
 ---
@@ -588,6 +614,10 @@ Validated / Normalized Nutrition
 Deterministic Original Nutri-Score
        ↓
 Partial Baseline Grade A-E
+       ↓
+OpenJev Reliability Decision
+       ↓
+TRUST / REVIEW / REJECT
 ```
 
-The current milestone includes normalization and deterministic grading. Next work is focused on the later AI-based grading and hybrid stages.
+The current milestone includes normalization, deterministic grading, and a local OpenJev reliability decision. Next work is focused on confidence-gated hybrid behavior and evaluation.

@@ -5,6 +5,7 @@ from extractor import NutritionExtractor
 from nutrition_parser import NutritionParser
 from nutrition_normalizer import NutritionNormalizer
 from nutri_score import NutriScoreCalculator
+from jev_decision import OpenJevDecisionLayer
 
 
 # ---------------------------------------------------------
@@ -20,6 +21,7 @@ RAW_OUTPUT        = OUTPUT_DIR / "raw_paddle_output.html"
 NUTRITION_OUTPUT  = OUTPUT_DIR / "nutrition.json"
 NORMALIZED_OUTPUT = OUTPUT_DIR / "normalized_nutrition.json"
 NUTRI_SCORE_OUTPUT = OUTPUT_DIR / "nutri_score.json"
+JEV_DECISION_OUTPUT = OUTPUT_DIR / "jev_decision.json"
 
 
 # ---------------------------------------------------------
@@ -92,6 +94,7 @@ def main():
     print("Stage 2: OCR output -> Canonical Nutrition JSON")
     print("Stage 3: Canonical JSON -> Normalized + Validated JSON")
     print("Stage 4: Normalized JSON -> Original Nutri-Score (general food)")
+    print("Stage 5: Deterministic result -> OpenJev reliability decision")
     print("=" * 60)
 
     # -----------------------------------------------------
@@ -213,6 +216,34 @@ def main():
     print("=" * 60)
     print(json.dumps(nutri_score, indent=4, ensure_ascii=False))
     print(f"\nSaved to:\n{NUTRI_SCORE_OUTPUT}")
+
+    # -----------------------------------------------------
+    # Stage 5: OpenJev reliability decision
+    # -----------------------------------------------------
+
+    print("\n" + "-" * 60)
+    print("Stage 5 — OpenJev reliability decision")
+    print("-" * 60)
+
+    jev_decision = OpenJevDecisionLayer().decide(normalized_output, nutri_score)
+    JEV_DECISION_OUTPUT.write_text(
+        json.dumps(jev_decision, indent=4, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    print("\n" + "=" * 60)
+    print("OPENJEV RELIABILITY DECISION (Stage 5)")
+    print("=" * 60)
+    if jev_decision["status"] == "success":
+        print(f"Decision: {jev_decision['decision']}")
+        print(f"Confidence: {jev_decision['confidence']:.4f}")
+        print("\nProbabilities:")
+        for choice in ("TRUST", "REVIEW", "REJECT"):
+            print(f"{choice:<7}: {jev_decision['probabilities'][choice]:.4f}")
+    else:
+        print("Reliability decision: unavailable")
+        print(f"Reason: {jev_decision['error']}")
+    print(f"\nSaved to:\n{JEV_DECISION_OUTPUT}")
 
     # -----------------------------------------------------
     # Validation summary
